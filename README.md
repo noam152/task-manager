@@ -1,15 +1,15 @@
 # Task Manager
 
-A beginner-friendly task management web application planned with Python,
+A beginner-friendly task management web application built with Python,
 Streamlit, SQLite, and pytest.
 
 ## Current status
 
-The Task model, SQLite persistence layer, and service layer are implemented and
-tested. The Streamlit interface remains a placeholder. No application database is
-created automatically. Automated GitHub checks will be configured in a later step.
+The Task model, SQLite persistence layer, service layer, and Streamlit interface
+are implemented and tested. Starting the app safely initializes its local database.
+Automated GitHub checks will be configured in a later step.
 
-Planned features:
+Features:
 
 - Create, edit, and delete tasks.
 - Complete and reopen tasks.
@@ -79,23 +79,72 @@ Run only the service tests with:
 
 Database and service integration tests use pytest's temporary directories, never
 an application database. Service unit tests use mocks to verify validation before
-database access. The interface test module remains a placeholder.
+database access. Run the Streamlit AppTest flows with:
 
-## Running the application later
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_app.py
+```
 
-After the interface is implemented, the Windows launch command will be:
+UI tests set `TASK_MANAGER_DB_PATH` to a temporary path before starting the app,
+so they never access the normal application database. AppTest is included in
+Streamlit; no extra testing dependency is required.
+
+## Running the application
+
+After completing development setup, run this exact command from the project root
+in PowerShell:
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-For now, `app.py` is only a placeholder and will display no application interface.
+On macOS/Linux:
+
+```sh
+.venv/bin/python -m streamlit run app.py
+```
+
+Streamlit normally opens the app in a browser at `http://localhost:8501`. If it
+does not open automatically, use the Local URL printed in the terminal. Stop the
+server with Ctrl+C.
+
+The app creates `data/` and initializes `data/tasks.db` beside `app.py` on startup.
+Repeated initialization preserves existing tasks. Tasks persist across browser
+refreshes and server restarts. Database files and SQLite sidecars are Git-ignored.
+No sample tasks are inserted.
+
+For an alternate local database, optionally set the path before starting:
+
+```powershell
+$env:TASK_MANAGER_DB_PATH = "C:\path\to\alternate\tasks.db"
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+Unset it with `Remove-Item Env:TASK_MANAGER_DB_PATH` to return to the default on
+the next server start. Relative override paths resolve from the working directory;
+the default path resolves relative to `app.py`.
+
+### Using the interface
+
+- Enter a title, optional description, and priority, then choose **Create task**.
+  Blank titles show a validation message and preserve your input for correction.
+- Use **Filter by status** to show All, Pending, or Completed tasks. Empty views
+  show a helpful message.
+- Choose **Edit**, update the fields, then **Save changes** or **Cancel editing**.
+  Editing details preserves the current completion state.
+- Choose **Complete** or **Reopen** to change completion status.
+- Choose **Delete**, then explicitly **Confirm deletion**. **Keep task** cancels
+  without changing the database. Deleted tasks cannot be restored through the UI.
+
+Successful operations show confirmation messages. If a selected task has been
+removed, the app shows a warning instead of failing. Database access failures
+show a friendly error; check directory permissions or retry when a lock clears.
 
 ## Project layout
 
 ```text
 task-manager/
-|-- app.py                    # Future Streamlit interface
+|-- app.py                    # Streamlit forms, task cards, and actions
 |-- task_manager/
 |   |-- __init__.py           # Importable application package
 |   |-- models.py             # Task dataclass and Priority enum
@@ -105,7 +154,7 @@ task-manager/
 |   |-- conftest.py           # Future shared fixtures
 |   |-- test_database.py      # Persistence and connection-management tests
 |   |-- test_services.py      # Service unit and integration tests
-|   `-- test_app.py           # Future interface tests
+|   `-- test_app.py           # Streamlit AppTest user flows and validation
 |-- .github/workflows/
 |   `-- .gitkeep              # Preserves the future CI directory
 |-- .gitignore               # Excludes local/generated files and secrets
@@ -123,7 +172,7 @@ to an empty string, priority to `Priority.MEDIUM`, and completion to `False`.
 `Priority` is a string enum defining `Low`, `Medium`, and `High` in display order.
 
 All persistence functions require an explicit file-backed path (`str` or `Path`).
-The future UI can choose `data/tasks.db`; tests always choose temporary paths.
+The UI uses `data/tasks.db` by default; tests always choose temporary paths.
 Importing the package does not create directories or open a database.
 
 | Function | Behavior |
