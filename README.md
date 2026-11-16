@@ -7,7 +7,8 @@ Streamlit, SQLite, and pytest.
 
 The Task model, SQLite persistence layer, service layer, and Streamlit interface
 are implemented and tested. Starting the app safely initializes its local database.
-Automated GitHub checks will be configured in a later step.
+GitHub Actions is configured to run the full test suite on pushes to `main` and
+pull requests targeting `main` once the project is published.
 
 Features:
 
@@ -89,6 +90,28 @@ UI tests set `TASK_MANAGER_DB_PATH` to a temporary path before starting the app,
 so they never access the normal application database. AppTest is included in
 Streamlit; no extra testing dependency is required.
 
+### Automated tests (GitHub Actions)
+
+`.github/workflows/tests.yml` installs `requirements-dev.txt` on `ubuntu-latest`
+with Python 3.12 and runs `python -m pytest`. It includes the database, service,
+and Streamlit AppTest suites. The workflow needs no secrets and has read-only
+repository permissions. GitHub actions are pinned to commit SHAs with release
+comments; update the SHA and comment together when upgrading an action.
+
+Run the equivalent complete suite locally from the project root:
+
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest
+```
+
+```sh
+# macOS/Linux
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
 ## Running the application
 
 After completing development setup, run this exact command from the project root
@@ -156,7 +179,7 @@ task-manager/
 |   |-- test_services.py      # Service unit and integration tests
 |   `-- test_app.py           # Streamlit AppTest user flows and validation
 |-- .github/workflows/
-|   `-- .gitkeep              # Preserves the future CI directory
+|   `-- tests.yml             # GitHub Actions: Python 3.12 and full pytest suite
 |-- .gitignore               # Excludes local/generated files and secrets
 |-- pytest.ini               # Test discovery and package import settings
 |-- requirements.txt         # Direct runtime dependencies
@@ -249,6 +272,6 @@ review `git status` and the staged diff. Virtual environments, database files,
 caches, and common secret files are ignored. Git ignore patterns cannot detect
 secrets embedded in source files, so review those files too.
 
-Before GitHub publication, choose a license, finish the setup documentation,
-implement a pytest workflow, and verify the full test suite. Add a remote and
+Before GitHub publication, choose a license, review the setup documentation,
+and verify the full test suite. Add a remote and
 push only when publication is authorized.
