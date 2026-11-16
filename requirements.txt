@@ -1,0 +1,2 @@
+# Runtime dependency; compatible with Python 3.12.
+streamlit==1.51.0
