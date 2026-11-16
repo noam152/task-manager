@@ -5,8 +5,8 @@ Streamlit, SQLite, and pytest.
 
 ## Current status
 
-The Task model and SQLite persistence layer are implemented and tested. Services
-and the Streamlit interface remain placeholders. No application database is
+The Task model, SQLite persistence layer, and service layer are implemented and
+tested. The Streamlit interface remains a placeholder. No application database is
 created automatically. Automated GitHub checks will be configured in a later step.
 
 Planned features:
@@ -71,8 +71,15 @@ Run only the persistence tests with:
 .\.venv\Scripts\python.exe -m pytest tests/test_database.py
 ```
 
-All database tests use pytest's temporary directories, never an application
-database. Service and interface test modules remain placeholders.
+Run only the service tests with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_services.py
+```
+
+Database and service integration tests use pytest's temporary directories, never
+an application database. Service unit tests use mocks to verify validation before
+database access. The interface test module remains a placeholder.
 
 ## Running the application later
 
@@ -93,11 +100,11 @@ task-manager/
 |   |-- __init__.py           # Importable application package
 |   |-- models.py             # Task dataclass and Priority enum
 |   |-- database.py           # SQLite connections, schema, and CRUD
-|   `-- services.py           # Future validation and task operations
+|   `-- services.py           # Validation, task operations, and status filtering
 |-- tests/
 |   |-- conftest.py           # Future shared fixtures
 |   |-- test_database.py      # Persistence and connection-management tests
-|   |-- test_services.py      # Future behavior tests
+|   |-- test_services.py      # Service unit and integration tests
 |   `-- test_app.py           # Future interface tests
 |-- .github/workflows/
 |   `-- .gitkeep              # Preserves the future CI directory
@@ -134,9 +141,54 @@ so per-connection `:memory:` databases are unsuitable for this API. SQLite error
 propagate to the caller, including `sqlite3.IntegrityError` for constraint
 violations. The schema enforces non-null fields, supported priorities, and
 completion values of 0 or 1. User-supplied query values are parameterized.
-Blank-title checks and other business validation belong to the future services
+Blank-title checks and other business validation belong to the services
 layer; the database does not trim or reject blank text. Initialization creates
 the initial schema; it does not migrate an incompatible existing schema.
+
+## Service API
+
+Use `task_manager.services` for validated application operations. Its functions
+require the same explicit file-backed database path as persistence. Initialize
+the database through `database.initialize_database(db_path)` before using it;
+services do not initialize databases implicitly or contain SQL.
+
+| Function | Behavior |
+| --- | --- |
+| `create_task(db_path, title, description="", priority=Priority.MEDIUM, completed=False)` | Validates and returns a new persisted `Task`. |
+| `get_task(db_path, task_id)` | Returns a task or `None` for a missing ID. |
+| `update_task(db_path, task)` | Validates and replaces all editable fields; returns `False` if missing, otherwise `True`, even when unchanged. Does not mutate the supplied task. |
+| `set_task_completed(db_path, task_id, completed)` | Pass `True` to complete or `False` to reopen. Preserves the other fields. Returns `False` if missing; repeating the current state returns `True`. |
+| `delete_task(db_path, task_id)` | Returns `True` if deleted, or `False` if missing/already deleted. |
+| `list_tasks(db_path, status="All")` | Accepts exactly `All`, `Pending`, or `Completed`, preserves ascending ID order, and returns an empty list when nothing matches. |
+
+Creation and updates require a string title containing non-whitespace characters.
+Leading/trailing title whitespace is stripped; internal whitespace and Unicode
+are preserved. Duplicate titles are allowed. Descriptions must be strings;
+empty descriptions are allowed and their whitespace is preserved. Priorities
+accept a `Priority` member or its exact label (`Low`, `Medium`, or `High`), without
+case conversion or whitespace trimming. Completion values must be actual booleans,
+not integers or strings.
+
+Invalid fields or status filters raise `ValueError` before database access.
+Updates validate input even when the supplied ID does not exist. For valid input,
+missing IDs follow the database API's `None`/`False` behavior. Database exceptions
+propagate unchanged; they are not converted into validation errors.
+
+Updates accept the full `Task`, matching the existing database API. Use
+`dataclasses.replace` to preserve fields that are not being edited:
+
+```python
+from dataclasses import replace
+from task_manager import services
+from task_manager.models import Priority
+
+# db_path must refer to an explicitly initialized database.
+task = services.create_task(db_path, "  Write tests  ", priority=Priority.HIGH)
+services.update_task(db_path, replace(task, description="Cover edge cases"))
+services.set_task_completed(db_path, task.id, True)
+completed_tasks = services.list_tasks(db_path, "Completed")
+services.set_task_completed(db_path, task.id, False)  # Reopen the task.
+```
 
 ## Git and GitHub
 
