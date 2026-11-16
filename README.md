@@ -5,9 +5,9 @@ Streamlit, SQLite, and pytest.
 
 ## Current status
 
-Only project initialization is complete. Python modules and test modules are
-placeholders. There is no Streamlit interface, task behavior, database schema,
-or database file yet. Automated GitHub checks will be configured in a later step.
+The Task model and SQLite persistence layer are implemented and tested. Services
+and the Streamlit interface remain placeholders. No application database is
+created automatically. Automated GitHub checks will be configured in a later step.
 
 Planned features:
 
@@ -65,9 +65,14 @@ On macOS/Linux, replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
 that the package is available from the project root. `pytest.ini` sets the test
 directory and adds the project root to pytest's import path.
 
-At this stage pytest reports **no tests ran** and exits with code **5**, because
-test modules contain no test functions. This is expected during initialization;
-behavior tests will accompany later implementation steps.
+Run only the persistence tests with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_database.py
+```
+
+All database tests use pytest's temporary directories, never an application
+database. Service and interface test modules remain placeholders.
 
 ## Running the application later
 
@@ -86,12 +91,12 @@ task-manager/
 |-- app.py                    # Future Streamlit interface
 |-- task_manager/
 |   |-- __init__.py           # Importable application package
-|   |-- models.py             # Future task model and allowed values
-|   |-- database.py           # Future SQLite storage operations
+|   |-- models.py             # Task dataclass and Priority enum
+|   |-- database.py           # SQLite connections, schema, and CRUD
 |   `-- services.py           # Future validation and task operations
 |-- tests/
 |   |-- conftest.py           # Future shared fixtures
-|   |-- test_database.py      # Future persistence tests
+|   |-- test_database.py      # Persistence and connection-management tests
 |   |-- test_services.py      # Future behavior tests
 |   `-- test_app.py           # Future interface tests
 |-- .github/workflows/
@@ -103,9 +108,35 @@ task-manager/
 `-- README.md                # Setup, scope, and project guide
 ```
 
-The future database will live at `data/tasks.db`; that directory and database
-will be created when persistence is implemented. Tests will use isolated
-temporary databases.
+## Persistence API
+
+`Task` is a dataclass with `id`, `title`, `description`, `priority`, and
+`completed` fields. SQLite assigns IDs when creating tasks. Description defaults
+to an empty string, priority to `Priority.MEDIUM`, and completion to `False`.
+`Priority` is a string enum defining `Low`, `Medium`, and `High` in display order.
+
+All persistence functions require an explicit file-backed path (`str` or `Path`).
+The future UI can choose `data/tasks.db`; tests always choose temporary paths.
+Importing the package does not create directories or open a database.
+
+| Function | Behavior |
+| --- | --- |
+| `initialize_database(db_path)` | Creates parent directories and the table; safe to repeat without losing tasks. |
+| `create_task(db_path, title, description="", priority=Priority.MEDIUM, completed=False)` | Inserts and returns a `Task` with its generated ID. |
+| `get_task(db_path, task_id)` | Returns a `Task`, or `None` for a missing ID. |
+| `list_tasks(db_path)` | Returns tasks in ascending ID order, or an empty list. |
+| `update_task(db_path, task)` | Replaces editable fields by ID; returns `True` if found, including unchanged values, or `False` if missing. |
+| `delete_task(db_path, task_id)` | Returns `True` if deleted, or `False` if missing or already deleted. |
+| `get_connection(db_path)` | Context manager that commits on success, rolls back on error, and always closes the connection. |
+
+Call initialization before CRUD operations. Each call uses a new connection,
+so per-connection `:memory:` databases are unsuitable for this API. SQLite errors
+propagate to the caller, including `sqlite3.IntegrityError` for constraint
+violations. The schema enforces non-null fields, supported priorities, and
+completion values of 0 or 1. User-supplied query values are parameterized.
+Blank-title checks and other business validation belong to the future services
+layer; the database does not trim or reject blank text. Initialization creates
+the initial schema; it does not migrate an incompatible existing schema.
 
 ## Git and GitHub
 
