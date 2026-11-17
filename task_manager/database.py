@@ -9,12 +9,12 @@ files or connections.
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, date, datetime
 from pathlib import Path
-from datetime import date, datetime, timezone
 
-from task_manager.models import Priority, Task, TaskPage, TaskSummary
 from task_manager import migrations
 from task_manager.errors import ConflictError, SchemaError
+from task_manager.models import Priority, Task, TaskPage, TaskSummary
 
 DatabasePath = str | Path
 CONNECTION_TIMEOUT = 5.0
@@ -103,22 +103,24 @@ def create_task(
         cursor = connection.execute(
             """INSERT INTO tasks (title, description, priority, completed, due_date, category, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (title, description, priority, completed,
-             due_date.isoformat() if due_date is not None else None, category,
-             datetime.now(timezone.utc).isoformat(timespec="microseconds")),
+            (
+                title,
+                description,
+                priority,
+                completed,
+                due_date.isoformat() if due_date is not None else None,
+                category,
+                datetime.now(UTC).isoformat(timespec="microseconds"),
+            ),
         )
-        row = connection.execute(
-            "SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)
-        ).fetchone()
+        row = connection.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return _to_task(row)
 
 
 def get_task(db_path: DatabasePath, task_id: int) -> Task | None:
     """Return the task with this ID, or None when it does not exist."""
     with get_connection(db_path) as connection:
-        row = connection.execute(
-            "SELECT * FROM tasks WHERE id = ?", (task_id,)
-        ).fetchone()
+        row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return _to_task(row) if row is not None else None
 
 
@@ -148,8 +150,12 @@ def _where(completed: bool | None, search: str, category: str | None) -> tuple[s
 
 
 def list_tasks(
-    db_path: DatabasePath, *, completed: bool | None = None,
-    search: str = "", category: str | None = None, sort: str = "id",
+    db_path: DatabasePath,
+    *,
+    completed: bool | None = None,
+    search: str = "",
+    category: str | None = None,
+    sort: str = "id",
 ) -> list[Task]:
     """Filter and sort in SQLite; default ordering preserves the original API."""
     if sort not in _SORTS:
@@ -163,8 +169,14 @@ def list_tasks(
 
 
 def get_task_page(
-    db_path: DatabasePath, *, completed: bool | None = None, search: str = "",
-    category: str | None = None, sort: str = "id", page: int = 1, page_size: int = 10,
+    db_path: DatabasePath,
+    *,
+    completed: bool | None = None,
+    search: str = "",
+    category: str | None = None,
+    sort: str = "id",
+    page: int = 1,
+    page_size: int = 10,
 ) -> TaskPage:
     """Count and fetch a bounded page in one read snapshot; clamp deleted pages."""
     if sort not in _SORTS or type(page) is not int or page < 1:
@@ -196,9 +208,12 @@ def get_summary(db_path: DatabasePath, today: date) -> TaskSummary:
 
 def list_categories(db_path: DatabasePath) -> list[str]:
     with get_connection(db_path) as connection:
-        return [row[0] for row in connection.execute(
-            "SELECT DISTINCT category FROM tasks WHERE category != '' ORDER BY category COLLATE NOCASE, category"
-        )]
+        return [
+            row[0]
+            for row in connection.execute(
+                "SELECT DISTINCT category FROM tasks WHERE category != '' ORDER BY category COLLATE NOCASE, category"
+            )
+        ]
 
 
 def update_task(db_path: DatabasePath, task: Task) -> bool:
@@ -214,9 +229,16 @@ def update_task(db_path: DatabasePath, task: Task) -> bool:
                SET title = ?, description = ?, priority = ?, completed = ?,
                    due_date = ?, category = ?, version = version + 1
                WHERE id = ? AND version = ?""",
-            (task.title, task.description, task.priority, task.completed,
-             task.due_date.isoformat() if task.due_date is not None else None,
-             task.category, task.id, task.version),
+            (
+                task.title,
+                task.description,
+                task.priority,
+                task.completed,
+                task.due_date.isoformat() if task.due_date is not None else None,
+                task.category,
+                task.id,
+                task.version,
+            ),
         )
         if cursor.rowcount:
             return True
@@ -237,12 +259,15 @@ def set_task_completed(db_path: DatabasePath, task_id: int, completed: bool) -> 
     with get_connection(db_path) as connection:
         cursor = connection.execute(
             """UPDATE tasks SET completed = ?, version = version + (completed != ?)
-               WHERE id = ?""", (completed, completed, task_id)
+               WHERE id = ?""",
+            (completed, completed, task_id),
         )
         return cursor.rowcount > 0
 
 
-def delete_task(db_path: DatabasePath, task_id: int, *, expected_version: int | None = None) -> bool:
+def delete_task(
+    db_path: DatabasePath, task_id: int, *, expected_version: int | None = None
+) -> bool:
     """Delete by ID, optionally checking the revision shown for confirmation."""
     with get_connection(db_path) as connection:
         if expected_version is None:

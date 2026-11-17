@@ -39,7 +39,12 @@ def test_migrate_original_database_without_changing_user_data(tmp_path):
     database.initialize_database(path)
     task = database.get_task(path, 42)
     assert (task.id, task.title, task.description, task.priority, task.completed, task.version) == (
-        42, "Keep", "Details", "High", True, 1
+        42,
+        "Keep",
+        "Details",
+        "High",
+        True,
+        1,
     )
     assert database.create_task(path, "Next").id > 42
     with database.get_connection(path) as connection:
@@ -58,7 +63,9 @@ def test_failed_migration_rolls_back_ddl_and_version(db_path, monkeypatch):
     with pytest.raises(RuntimeError, match="migration failed"):
         database.initialize_database(db_path)
     with database.get_connection(db_path) as connection:
-        assert "must_not_persist" not in [row[1] for row in connection.execute("PRAGMA table_info(tasks)")]
+        assert "must_not_persist" not in [
+            row[1] for row in connection.execute("PRAGMA table_info(tasks)")
+        ]
         assert connection.execute("PRAGMA user_version").fetchone()[0] == len(original)
     assert database.get_task(db_path, task.id) == task
     monkeypatch.setattr(migrations, "MIGRATIONS", original)

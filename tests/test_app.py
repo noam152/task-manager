@@ -10,6 +10,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from task_manager import database, services
+from task_manager.errors import SchemaError
 from task_manager.models import Priority
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
@@ -93,7 +94,8 @@ def test_priority_default_and_form_reset_have_no_state_warning(ui, monkeypatch, 
     assert not app.exception
     assert not app.warning
     assert [task.priority for task in services.list_tasks(path)] == [
-        Priority(priority), Priority.MEDIUM
+        Priority(priority),
+        Priority.MEDIUM,
     ]
 
 
@@ -118,7 +120,10 @@ def test_edit_changes_details_and_preserves_completion(ui):
     assert app.success[0].value == "Task updated."
     edited = services.get_task(path, task.id)
     assert (edited.title, edited.description, edited.priority, edited.completed) == (
-        "Edited", "New details", Priority.LOW, True
+        "Edited",
+        "New details",
+        Priority.LOW,
+        True,
     )
     assert "Edited" in visible_text(app)
     assert not any(item.key == "edit_title" for item in app.text_input)
@@ -201,9 +206,11 @@ def test_missing_task_during_completion_is_not_reported_as_success(ui, monkeypat
 
 def test_database_error_shows_friendly_message(ui, monkeypatch):
     app, _ = ui
-    monkeypatch.setattr(database, "initialize_database", Mock(
-        side_effect=sqlite3.OperationalError("internal details")
-    ))
+    monkeypatch.setattr(
+        database,
+        "initialize_database",
+        Mock(side_effect=sqlite3.OperationalError("internal details")),
+    )
     app.run()
     assert not app.exception
     assert "Unable to access" in app.error[0].value
@@ -221,9 +228,14 @@ def test_due_date_category_form_reset_and_summary_metrics(ui):
     assert app.date_input(key="new_due").value is None
     assert app.text_input(key="new_category").value == ""
     assert {item.label: item.value for item in app.metric} == {
-        "Total": "1", "Pending": "1", "Completed": "0", "Overdue": "1"
+        "Total": "1",
+        "Pending": "1",
+        "Completed": "0",
+        "Overdue": "1",
     }
-    assert any("Overdue" in item.value and yesterday.isoformat() in item.value for item in app.caption)
+    assert any(
+        "Overdue" in item.value and yesterday.isoformat() in item.value for item in app.caption
+    )
     assert not app.exception and not app.warning
 
 
@@ -337,4 +349,41 @@ def test_previous_page_navigation_and_refresh_preserve_filters(ui):
     app.button(key="previous_page").click().run()
     app.button(key="refresh").click().run()
     assert not app.exception
-    assert any("Page 1 of 2" in item.value for item in app.caption), [item.value for item in app.caption]
+    assert any("Page 1 of 2" in item.value for item in app.caption), [
+        item.value for item in app.caption
+    ]
+
+
+def test_newer_schema_shows_actionable_error_without_traceback(ui, monkeypatch):
+    app, _ = ui
+    monkeypatch.setattr(
+        database,
+        "initialize_database",
+        Mock(side_effect=SchemaError("Database was created by a newer application version.")),
+    )
+    app.run()
+    assert not app.exception
+    assert "newer application version" in app.error[0].value
+
+
+def test_changed_delete_can_be_cancelled_without_losing_data(ui):
+    app, path = ui
+    task = services.create_task(path, "Keep")
+    app.run().button(key=f"delete_{task.id}").click().run()
+    services.set_task_completed(path, task.id, True)
+    app.run().button(key="cancel_delete").click().run()
+    assert not app.exception
+    assert services.get_task(path, task.id).completed is True
+    assert not any(item.key == "confirm_delete" for item in app.button)
+
+
+def test_deleting_open_editor_closes_it_and_displays_confirmation_details(ui):
+    app, path = ui
+    task = services.create_task(path, "Delete", "Review these details")
+    app.run().button(key=f"edit_{task.id}").click().run()
+    app.button(key=f"delete_{task.id}").click().run()
+    assert "Review these details" in visible_text(app)
+    app.button(key="confirm_delete").click().run()
+    assert not app.exception
+    assert services.get_task(path, task.id) is None
+    assert not any(item.key == "edit_title" for item in app.text_input)

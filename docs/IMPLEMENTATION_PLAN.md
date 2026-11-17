@@ -28,3 +28,23 @@ Baseline: clean `main` at `4426ced`; 103 tests pass on Python 3.12.10.
 
 Use a dedicated local branch and commits containing tests alongside each phase.
 Never test against application data, push, merge, deploy or change GitHub settings.
+
+## Completion record
+
+| Phase | Local verification |
+| --- | --- |
+| Baseline | 103 existing tests passed; clean main matched origin/main. |
+| Integrity | 113 total tests passed, including migration and concurrency regressions. |
+| Queries | 147 backend tests passed, including search escaping, sorting and page bounds. |
+| Dashboard | 169 total tests passed; fixed a pagination trigger regression found by AppTest. |
+| Delivery | 172 tests passed; 98.19% combined statement/branch coverage; Ruff lint/format and diff checks passed. |
+
+Workflow YAML/TOML and all required CI gates were checked locally. A pip dry run
+resolved the pinned dependencies for Python 3.12 Linux wheels. Actual Ubuntu CI
+execution awaits a separately authorized push/PR. The remaining uncovered paths
+are defensive direct-database argument checks, a schema version race guard and
+minor UI presentation/import branches. No critical write path is excluded.
+
+The user selected MIT after being presented license choices. No real user database
+was migrated during implementation. Back up before launching V2. No remote push,
+merge, deployment, history rewrite or repository-settings change was performed.

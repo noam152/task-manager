@@ -1,7 +1,7 @@
 """Numbered, transactional schema changes; never rebuild or drop user tables."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from task_manager.errors import SchemaError
 
@@ -34,7 +34,7 @@ def task_organization(connection: sqlite3.Connection) -> None:
     connection.execute("ALTER TABLE tasks ADD COLUMN category TEXT NOT NULL DEFAULT ''")
     connection.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
     # The original app did not record creation times; record upgrade time for it.
-    timestamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    timestamp = datetime.now(UTC).isoformat(timespec="microseconds")
     connection.execute("UPDATE tasks SET created_at = ?", (timestamp,))
     connection.execute("CREATE INDEX tasks_status_id ON tasks(completed, id)")
     connection.execute("CREATE INDEX tasks_category_status ON tasks(category, completed, id)")

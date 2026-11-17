@@ -144,7 +144,11 @@ def test_filters_preserve_order_and_follow_completion_changes(db_path, status):
     services.set_task_completed(db_path, first.id, True)
     services.set_task_completed(db_path, second.id, False)
     expected = {
-        "All": [replace(first, completed=True, version=2), replace(second, completed=False, version=2), third],
+        "All": [
+            replace(first, completed=True, version=2),
+            replace(second, completed=False, version=2),
+            third,
+        ],
         "Pending": [replace(second, completed=False, version=2), third],
         "Completed": [replace(first, completed=True, version=2)],
     }

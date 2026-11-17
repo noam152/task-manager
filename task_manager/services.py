@@ -6,8 +6,8 @@ Missing IDs follow persistence semantics: None for reads, False for mutations.
 """
 
 from dataclasses import replace
-from typing import Literal
 from datetime import date
+from typing import Literal
 
 from task_manager import database
 from task_manager.database import DatabasePath
@@ -88,16 +88,18 @@ def update_task(db_path: DatabasePath, task: Task) -> bool:
     _validate_version(task.version)
     due_date, category = _validate_organization(task.due_date, task.category)
     validated = replace(
-        task, title=title, description=description,
-        priority=priority, completed=completed,
-        due_date=due_date, category=category,
+        task,
+        title=title,
+        description=description,
+        priority=priority,
+        completed=completed,
+        due_date=due_date,
+        category=category,
     )
     return database.update_task(db_path, validated)
 
 
-def set_task_completed(
-    db_path: DatabasePath, task_id: int, completed: bool
-) -> bool:
+def set_task_completed(db_path: DatabasePath, task_id: int, completed: bool) -> bool:
     """Complete (True) or reopen (False) a task without changing its text.
 
     Repeating the current state succeeds. Missing IDs return False; an invalid
@@ -109,7 +111,9 @@ def set_task_completed(
     return database.set_task_completed(db_path, task_id, completed)
 
 
-def delete_task(db_path: DatabasePath, task_id: int, *, expected_version: int | None = None) -> bool:
+def delete_task(
+    db_path: DatabasePath, task_id: int, *, expected_version: int | None = None
+) -> bool:
     """Delete a task; return False if absent or already deleted."""
     _validate_id(task_id)
     if expected_version is not None:
@@ -117,9 +121,7 @@ def delete_task(db_path: DatabasePath, task_id: int, *, expected_version: int | 
     return database.delete_task(db_path, task_id, expected_version=expected_version)
 
 
-def _query_filters(
-    status: StatusFilter, search: str, category: str | None, sort: str
-) -> dict:
+def _query_filters(status: StatusFilter, search: str, category: str | None, sort: str) -> dict:
     if status not in ("All", "Pending", "Completed"):
         raise ValueError("Status must be All, Pending, or Completed.")
     if not isinstance(search, str) or len(search) > 200:
@@ -128,21 +130,35 @@ def _query_filters(
         _, category = _validate_organization(None, category)
     if sort not in SORT_ORDERS:
         raise ValueError("Unsupported sort order.")
-    return dict(completed=None if status == "All" else status == "Completed",
-                search=search.strip(), category=category, sort=sort)
+    return dict(
+        completed=None if status == "All" else status == "Completed",
+        search=search.strip(),
+        category=category,
+        sort=sort,
+    )
 
 
 def list_tasks(
-    db_path: DatabasePath, status: StatusFilter = "All", *, search: str = "",
-    category: str | None = None, sort: str = "id",
+    db_path: DatabasePath,
+    status: StatusFilter = "All",
+    *,
+    search: str = "",
+    category: str | None = None,
+    sort: str = "id",
 ) -> list[Task]:
     """Filter in SQLite; intended for exports/tests, use pages for the UI."""
     return database.list_tasks(db_path, **_query_filters(status, search, category, sort))
 
 
 def get_task_page(
-    db_path: DatabasePath, status: StatusFilter = "All", *, search: str = "",
-    category: str | None = None, sort: str = "id", page: int = 1, page_size: int = 10,
+    db_path: DatabasePath,
+    status: StatusFilter = "All",
+    *,
+    search: str = "",
+    category: str | None = None,
+    sort: str = "id",
+    page: int = 1,
+    page_size: int = 10,
 ) -> TaskPage:
     filters = _query_filters(status, search, category, sort)
     if type(page) is not int or page < 1:

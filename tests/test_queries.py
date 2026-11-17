@@ -1,7 +1,7 @@
 """V2 fields, SQL queries, summary counts and validation boundaries."""
 
 from dataclasses import replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -18,9 +18,7 @@ def db_path(tmp_path):
 
 
 def test_organization_fields_round_trip_and_can_be_cleared(db_path):
-    task = services.create_task(
-        db_path, "Plan", due_date=date(2030, 1, 2), category="  Work  "
-    )
+    task = services.create_task(db_path, "Plan", due_date=date(2030, 1, 2), category="  Work  ")
     assert task.due_date == date(2030, 1, 2)
     assert task.category == "Work"
     assert task.created_at.tzinfo is not None
@@ -41,10 +39,16 @@ def test_invalid_due_dates_fail_before_persistence(monkeypatch, due_date):
     create.assert_not_called()
 
 
-@pytest.mark.parametrize("field,value", [
-    ("title", "x" * 201), ("description", "x" * 10001),
-    ("category", "x" * 81), ("category", None), ("category", 1),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("title", "x" * 201),
+        ("description", "x" * 10001),
+        ("category", "x" * 81),
+        ("category", None),
+        ("category", 1),
+    ],
+)
 def test_invalid_fields_leave_data_unchanged(db_path, field, value):
     task = services.create_task(db_path, "Keep")
     with pytest.raises(ValueError):
@@ -68,9 +72,12 @@ def test_combined_filters_are_consistent_with_pagination(db_path, status, catego
         services.create_task(db_path, "Needle two"),
         services.create_task(db_path, "Unrelated", category="Work"),
     ]
-    expected = [t for t in tasks[:3]
-                if (status == "All" or t.completed == (status == "Completed"))
-                and (category is None or t.category == category)]
+    expected = [
+        t
+        for t in tasks[:3]
+        if (status == "All" or t.completed == (status == "Completed"))
+        and (category is None or t.category == category)
+    ]
     result = services.list_tasks(db_path, status, search="needle", category=category)
     page = services.get_task_page(db_path, status, search="needle", category=category)
     assert result == expected == page.tasks
@@ -110,11 +117,21 @@ def test_pages_are_bounded_and_clamped_after_deletions(db_path):
     assert empty.tasks == [] and empty.total == 0 and empty.page == empty.pages == 1
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"sort": "id; DROP TABLE tasks"}, {"search": None}, {"search": "x" * 201},
-    {"category": 1}, {"page": 0}, {"page": True}, {"page": 1.5},
-    {"page_size": 0}, {"page_size": 101}, {"page_size": False},
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"sort": "id; DROP TABLE tasks"},
+        {"search": None},
+        {"search": "x" * 201},
+        {"category": 1},
+        {"page": 0},
+        {"page": True},
+        {"page": 1.5},
+        {"page_size": 0},
+        {"page_size": 101},
+        {"page_size": False},
+    ],
+)
 def test_invalid_query_arguments_never_reach_sql(monkeypatch, kwargs):
     query = Mock()
     monkeypatch.setattr(database, "get_task_page", query)
@@ -126,7 +143,9 @@ def test_invalid_query_arguments_never_reach_sql(monkeypatch, kwargs):
 def test_global_summary_overdue_rules_and_category_choices(db_path):
     today = date(2030, 1, 2)
     assert services.get_summary(db_path, today=today) == TaskSummary(0, 0, 0, 0)
-    late = services.create_task(db_path, "Late", due_date=today - timedelta(days=1), category="Work")
+    late = services.create_task(
+        db_path, "Late", due_date=today - timedelta(days=1), category="Work"
+    )
     due = services.create_task(db_path, "Today", due_date=today, category="Personal")
     done = services.create_task(db_path, "Done", due_date=today - timedelta(days=1), completed=True)
     services.create_task(db_path, "Unscheduled", category="Work")
@@ -161,7 +180,13 @@ def test_invalid_revisions_are_rejected(db_path, version):
 def test_query_indexes_exist_and_status_filter_uses_one(db_path):
     with database.get_connection(db_path) as connection:
         names = {row[1] for row in connection.execute("PRAGMA index_list(tasks)")}
-        assert {"tasks_status_id", "tasks_category_status", "tasks_due", "tasks_created", "tasks_priority"} <= names
+        assert {
+            "tasks_status_id",
+            "tasks_category_status",
+            "tasks_due",
+            "tasks_created",
+            "tasks_priority",
+        } <= names
         plan = connection.execute(
             "EXPLAIN QUERY PLAN SELECT * FROM tasks WHERE completed = 0 ORDER BY id LIMIT 10"
         ).fetchall()
@@ -172,4 +197,4 @@ def test_default_summary_date_is_current_calendar_date(db_path):
     services.create_task(db_path, "Late", due_date=date.today() - timedelta(days=1))
     assert services.get_summary(db_path).overdue == 1
     with pytest.raises(ValueError):
-        services.get_summary(db_path, today=datetime.now(timezone.utc))
+        services.get_summary(db_path, today=datetime.now(UTC))
