@@ -12,8 +12,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from task_manager.models import Priority, Task
+from task_manager import migrations
+from task_manager.errors import ConflictError, SchemaError
 
 DatabasePath = str | Path
+CONNECTION_TIMEOUT = 5.0
 
 
 @contextmanager
@@ -23,8 +26,10 @@ def get_connection(db_path: DatabasePath) -> Iterator[sqlite3.Connection]:
     Parent directories must already exist; initialize_database creates them.
     Separate calls use separate connections, so CRUD requires a file-backed DB.
     """
-    connection = sqlite3.connect(db_path, autocommit=False)
+    connection = sqlite3.connect(db_path, timeout=CONNECTION_TIMEOUT, autocommit=True)
     try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.autocommit = False
         connection.row_factory = sqlite3.Row
         with connection:
             yield connection
@@ -33,24 +38,34 @@ def get_connection(db_path: DatabasePath) -> Iterator[sqlite3.Connection]:
 
 
 def initialize_database(db_path: DatabasePath) -> None:
-    """Create parent directories and the tasks table without deleting data."""
+    """Apply numbered migrations atomically, preserving existing local tasks.
+
+    Migrations take an immediate write lock and recheck the version under that
+    lock. Already-current databases take only a short read; failures roll back.
+    """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    # Only fixed enum values form this SQL fragment; user input is always bound.
-    priorities = ", ".join(f"'{priority.value}'" for priority in Priority)
-    with get_connection(db_path) as connection:
-        connection.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                priority TEXT NOT NULL DEFAULT '{Priority.MEDIUM.value}'
-                    CHECK (priority IN ({priorities})),
-                completed INTEGER NOT NULL DEFAULT 0
-                    CHECK (completed IN (0, 1))
-            )
-            """
-        )
+    connection = sqlite3.connect(db_path, timeout=CONNECTION_TIMEOUT, autocommit=True)
+    try:
+        current = connection.execute("PRAGMA user_version").fetchone()[0]
+        if current > len(migrations.MIGRATIONS):
+            raise SchemaError("Database was created by a newer application version.")
+        if current == len(migrations.MIGRATIONS):
+            return
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute("PRAGMA user_version").fetchone()[0]
+        if current > len(migrations.MIGRATIONS):
+            raise SchemaError("Database was created by a newer application version.")
+        for version, migrate in enumerate(migrations.MIGRATIONS, start=1):
+            if version > current:
+                migrate(connection)
+                connection.execute(f"PRAGMA user_version = {version}")
+        connection.execute("COMMIT")
+    finally:
+        try:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+        finally:
+            connection.close()
 
 
 def _to_task(row: sqlite3.Row) -> Task:
@@ -61,6 +76,7 @@ def _to_task(row: sqlite3.Row) -> Task:
         description=row["description"],
         priority=Priority(row["priority"]),
         completed=bool(row["completed"]),
+        version=row["version"],
     )
 
 
@@ -107,20 +123,50 @@ def list_tasks(db_path: DatabasePath) -> list[Task]:
 def update_task(db_path: DatabasePath, task: Task) -> bool:
     """Replace all editable fields by ID; return False if the ID is missing.
 
-    An existing task returns True even when its values are unchanged.
+    The supplied version must match. A successful write increments the version,
+    including unchanged values. Reload before editing again. Conflicts raise
+    ConflictError; missing IDs still return False. The input Task is not mutated.
     """
     with get_connection(db_path) as connection:
         cursor = connection.execute(
             """UPDATE tasks
-               SET title = ?, description = ?, priority = ?, completed = ?
-               WHERE id = ?""",
-            (task.title, task.description, task.priority, task.completed, task.id),
+               SET title = ?, description = ?, priority = ?, completed = ?, version = version + 1
+               WHERE id = ? AND version = ?""",
+            (task.title, task.description, task.priority, task.completed, task.id, task.version),
+        )
+        if cursor.rowcount:
+            return True
+        return _missing_or_conflict(connection, task.id)
+
+
+def _missing_or_conflict(connection: sqlite3.Connection, task_id: int) -> bool:
+    if connection.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone():
+        raise ConflictError("This task changed in another session. Reload before trying again.")
+    return False
+
+
+def set_task_completed(db_path: DatabasePath, task_id: int, completed: bool) -> bool:
+    """Atomically update only completion; never overwrite task details.
+
+    Repeating the current state succeeds without changing its version.
+    """
+    with get_connection(db_path) as connection:
+        cursor = connection.execute(
+            """UPDATE tasks SET completed = ?, version = version + (completed != ?)
+               WHERE id = ?""", (completed, completed, task_id)
         )
         return cursor.rowcount > 0
 
 
-def delete_task(db_path: DatabasePath, task_id: int) -> bool:
-    """Delete by ID; return False if absent (including repeated deletes)."""
+def delete_task(db_path: DatabasePath, task_id: int, *, expected_version: int | None = None) -> bool:
+    """Delete by ID, optionally checking the revision shown for confirmation."""
     with get_connection(db_path) as connection:
-        cursor = connection.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-        return cursor.rowcount > 0
+        if expected_version is None:
+            cursor = connection.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        else:
+            cursor = connection.execute(
+                "DELETE FROM tasks WHERE id = ? AND version = ?", (task_id, expected_version)
+            )
+        if cursor.rowcount:
+            return True
+        return _missing_or_conflict(connection, task_id)

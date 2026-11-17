@@ -76,15 +76,12 @@ def set_task_completed(
     """
     if not isinstance(completed, bool):
         raise ValueError("Completed must be a boolean.")
-    task = database.get_task(db_path, task_id)
-    if task is None:
-        return False
-    return database.update_task(db_path, replace(task, completed=completed))
+    return database.set_task_completed(db_path, task_id, completed)
 
 
-def delete_task(db_path: DatabasePath, task_id: int) -> bool:
+def delete_task(db_path: DatabasePath, task_id: int, *, expected_version: int | None = None) -> bool:
     """Delete a task; return False if absent or already deleted."""
-    return database.delete_task(db_path, task_id)
+    return database.delete_task(db_path, task_id, expected_version=expected_version)
 
 
 def list_tasks(

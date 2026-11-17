@@ -21,3 +21,4 @@ class Task:
     description: str = ""
     priority: Priority = Priority.MEDIUM
     completed: bool = False
+    version: int = 1

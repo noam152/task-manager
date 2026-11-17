@@ -32,7 +32,7 @@ def test_initialization_creates_parent_directories_and_schema(tmp_path):
     with get_connection(path) as connection:
         columns = connection.execute("PRAGMA table_info(tasks)").fetchall()
     assert [column["name"] for column in columns] == [
-        "id", "title", "description", "priority", "completed"
+        "id", "title", "description", "priority", "completed", "version"
     ]
     assert columns[0]["pk"] == 1
     assert list_tasks(path) == []
@@ -82,10 +82,11 @@ def test_update_replaces_all_fields_and_can_reopen_task(db_path):
     edited = replace(task, title="Edited", description="Details",
                      priority=Priority.HIGH, completed=True)
     assert update_task(db_path, edited) is True
-    assert get_task(db_path, task.id) == edited
+    assert get_task(db_path, task.id) == replace(edited, version=task.version + 1)
     assert get_task(db_path, other.id) == other
-    assert update_task(db_path, edited) is True
-    reopened = replace(edited, completed=False)
+    current = get_task(db_path, task.id)
+    assert update_task(db_path, current) is True
+    reopened = replace(get_task(db_path, task.id), completed=False)
     assert update_task(db_path, reopened) is True
     assert get_task(db_path, task.id).completed is False
 
@@ -120,7 +121,7 @@ def test_changes_persist_across_independent_connections(db_path):
         ).fetchone() == ("Persisted", 1)
     finally:
         connection.close()
-    assert get_task(db_path, task.id) == edited
+    assert get_task(db_path, task.id) == replace(edited, version=task.version + 1)
     delete_task(db_path, task.id)
     assert list_tasks(db_path) == []
 
@@ -238,7 +239,7 @@ def test_sql_like_text_quotes_and_unicode_round_trip(db_path):
     assert get_task(db_path, task.id).description == description
     edited = replace(task, title=description, description=title)
     assert update_task(db_path, edited) is True
-    assert list_tasks(db_path) == [edited]
+    assert list_tasks(db_path) == [replace(edited, version=task.version + 1)]
     assert create_task(db_path, "Table still exists").id > task.id
 
 
