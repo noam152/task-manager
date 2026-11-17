@@ -32,7 +32,8 @@ def test_initialization_creates_parent_directories_and_schema(tmp_path):
     with get_connection(path) as connection:
         columns = connection.execute("PRAGMA table_info(tasks)").fetchall()
     assert [column["name"] for column in columns] == [
-        "id", "title", "description", "priority", "completed", "version"
+        "id", "title", "description", "priority", "completed", "version",
+        "due_date", "category", "created_at"
     ]
     assert columns[0]["pk"] == 1
     assert list_tasks(path) == []

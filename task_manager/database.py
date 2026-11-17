@@ -10,8 +10,9 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from datetime import date, datetime, timezone
 
-from task_manager.models import Priority, Task
+from task_manager.models import Priority, Task, TaskPage, TaskSummary
 from task_manager import migrations
 from task_manager.errors import ConflictError, SchemaError
 
@@ -77,6 +78,9 @@ def _to_task(row: sqlite3.Row) -> Task:
         priority=Priority(row["priority"]),
         completed=bool(row["completed"]),
         version=row["version"],
+        due_date=date.fromisoformat(row["due_date"]) if row["due_date"] else None,
+        category=row["category"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
     )
 
 
@@ -86,6 +90,9 @@ def create_task(
     description: str = "",
     priority: Priority = Priority.MEDIUM,
     completed: bool = False,
+    *,
+    due_date: date | None = None,
+    category: str = "",
 ) -> Task:
     """Insert a task and return it with its generated ID.
 
@@ -94,9 +101,11 @@ def create_task(
     """
     with get_connection(db_path) as connection:
         cursor = connection.execute(
-            """INSERT INTO tasks (title, description, priority, completed)
-               VALUES (?, ?, ?, ?)""",
-            (title, description, priority, completed),
+            """INSERT INTO tasks (title, description, priority, completed, due_date, category, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (title, description, priority, completed,
+             due_date.isoformat() if due_date is not None else None, category,
+             datetime.now(timezone.utc).isoformat(timespec="microseconds")),
         )
         row = connection.execute(
             "SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)
@@ -113,11 +122,83 @@ def get_task(db_path: DatabasePath, task_id: int) -> Task | None:
         return _to_task(row) if row is not None else None
 
 
-def list_tasks(db_path: DatabasePath) -> list[Task]:
-    """Return all tasks in ascending ID order; an empty database returns []."""
+_SORTS = {
+    "id": "id ASC",
+    "created_desc": "created_at DESC, id DESC",
+    "created_asc": "created_at ASC, id ASC",
+    "priority": "CASE priority WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, id ASC",
+    "due_date": "due_date IS NULL, due_date ASC, id ASC",
+}
+
+
+def _where(completed: bool | None, search: str, category: str | None) -> tuple[str, list]:
+    clauses, values = [], []
+    if completed is not None:
+        clauses.append("completed = ?")
+        values.append(completed)
+    if search:
+        # Treat LIKE metacharacters literally, rather than letting '%' match all.
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        clauses.append("(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')")
+        values.extend([f"%{escaped}%", f"%{escaped}%"])
+    if category is not None:
+        clauses.append("category = ?")
+        values.append(category)
+    return (" WHERE " + " AND ".join(clauses) if clauses else ""), values
+
+
+def list_tasks(
+    db_path: DatabasePath, *, completed: bool | None = None,
+    search: str = "", category: str | None = None, sort: str = "id",
+) -> list[Task]:
+    """Filter and sort in SQLite; default ordering preserves the original API."""
+    if sort not in _SORTS:
+        raise ValueError("Unsupported sort order.")
+    where, values = _where(completed, search, category)
     with get_connection(db_path) as connection:
-        rows = connection.execute("SELECT * FROM tasks ORDER BY id").fetchall()
+        rows = connection.execute(
+            f"SELECT * FROM tasks{where} ORDER BY {_SORTS[sort]}", values
+        ).fetchall()
         return [_to_task(row) for row in rows]
+
+
+def get_task_page(
+    db_path: DatabasePath, *, completed: bool | None = None, search: str = "",
+    category: str | None = None, sort: str = "id", page: int = 1, page_size: int = 10,
+) -> TaskPage:
+    """Count and fetch a bounded page in one read snapshot; clamp deleted pages."""
+    if sort not in _SORTS or type(page) is not int or page < 1:
+        raise ValueError("Invalid sort order or page.")
+    if type(page_size) is not int or not 1 <= page_size <= 100:
+        raise ValueError("Page size must be between 1 and 100.")
+    where, values = _where(completed, search, category)
+    with get_connection(db_path) as connection:
+        total = connection.execute(f"SELECT COUNT(*) FROM tasks{where}", values).fetchone()[0]
+        page = min(page, max(1, (total + page_size - 1) // page_size))
+        rows = connection.execute(
+            f"SELECT * FROM tasks{where} ORDER BY {_SORTS[sort]} LIMIT ? OFFSET ?",
+            [*values, page_size, (page - 1) * page_size],
+        ).fetchall()
+        return TaskPage([_to_task(row) for row in rows], total, page, page_size)
+
+
+def get_summary(db_path: DatabasePath, today: date) -> TaskSummary:
+    """Global counts, independent of the current list's filters."""
+    with get_connection(db_path) as connection:
+        row = connection.execute(
+            """SELECT COUNT(*), COALESCE(SUM(completed = 0), 0),
+                      COALESCE(SUM(completed = 1), 0),
+                      COALESCE(SUM(completed = 0 AND due_date < ?), 0) FROM tasks""",
+            (today.isoformat(),),
+        ).fetchone()
+        return TaskSummary(*row)
+
+
+def list_categories(db_path: DatabasePath) -> list[str]:
+    with get_connection(db_path) as connection:
+        return [row[0] for row in connection.execute(
+            "SELECT DISTINCT category FROM tasks WHERE category != '' ORDER BY category COLLATE NOCASE, category"
+        )]
 
 
 def update_task(db_path: DatabasePath, task: Task) -> bool:
@@ -130,9 +211,12 @@ def update_task(db_path: DatabasePath, task: Task) -> bool:
     with get_connection(db_path) as connection:
         cursor = connection.execute(
             """UPDATE tasks
-               SET title = ?, description = ?, priority = ?, completed = ?, version = version + 1
+               SET title = ?, description = ?, priority = ?, completed = ?,
+                   due_date = ?, category = ?, version = version + 1
                WHERE id = ? AND version = ?""",
-            (task.title, task.description, task.priority, task.completed, task.id, task.version),
+            (task.title, task.description, task.priority, task.completed,
+             task.due_date.isoformat() if task.due_date is not None else None,
+             task.category, task.id, task.version),
         )
         if cursor.rowcount:
             return True

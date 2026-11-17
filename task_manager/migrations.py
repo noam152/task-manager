@@ -1,6 +1,7 @@
 """Numbered, transactional schema changes; never rebuild or drop user tables."""
 
 import sqlite3
+from datetime import datetime, timezone
 
 from task_manager.errors import SchemaError
 
@@ -28,4 +29,21 @@ def task_versions(connection: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = (initial_schema, task_versions)
+def task_organization(connection: sqlite3.Connection) -> None:
+    connection.execute("ALTER TABLE tasks ADD COLUMN due_date TEXT")
+    connection.execute("ALTER TABLE tasks ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+    connection.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
+    # The original app did not record creation times; record upgrade time for it.
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    connection.execute("UPDATE tasks SET created_at = ?", (timestamp,))
+    connection.execute("CREATE INDEX tasks_status_id ON tasks(completed, id)")
+    connection.execute("CREATE INDEX tasks_category_status ON tasks(category, completed, id)")
+    connection.execute("CREATE INDEX tasks_due ON tasks(due_date, id) WHERE completed = 0")
+    connection.execute("CREATE INDEX tasks_created ON tasks(created_at DESC, id DESC)")
+    connection.execute(
+        """CREATE INDEX tasks_priority ON tasks(
+            CASE priority WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, id)"""
+    )
+
+
+MIGRATIONS = (initial_schema, task_versions, task_organization)
