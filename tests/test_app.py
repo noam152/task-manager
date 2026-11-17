@@ -1,6 +1,8 @@
 """Exercise the real Streamlit app with isolated temporary database paths."""
 
 import sqlite3
+from dataclasses import replace
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -206,3 +208,133 @@ def test_database_error_shows_friendly_message(ui, monkeypatch):
     assert not app.exception
     assert "Unable to access" in app.error[0].value
     assert "internal details" not in app.error[0].value
+
+
+def test_due_date_category_form_reset_and_summary_metrics(ui):
+    app, path = ui
+    yesterday = date.today() - timedelta(days=1)
+    app.date_input(key="new_due").set_value(yesterday)
+    app.text_input(key="new_category").input("Work")
+    create_task(app)
+    task = services.list_tasks(path)[0]
+    assert task.due_date == yesterday and task.category == "Work"
+    assert app.date_input(key="new_due").value is None
+    assert app.text_input(key="new_category").value == ""
+    assert {item.label: item.value for item in app.metric} == {
+        "Total": "1", "Pending": "1", "Completed": "0", "Overdue": "1"
+    }
+    assert any("Overdue" in item.value and yesterday.isoformat() in item.value for item in app.caption)
+    assert not app.exception and not app.warning
+
+
+def test_editor_saves_due_date_and_category(ui):
+    app, path = ui
+    task = services.create_task(path, "Plan", due_date=date.today(), category="Work")
+    app.run().button(key=f"edit_{task.id}").click().run()
+    app.date_input(key="edit_due").set_value(None)
+    app.text_input(key="edit_category").input("Personal")
+    button(app, "Save changes").click().run()
+    updated = services.get_task(path, task.id)
+    assert updated.due_date is None and updated.category == "Personal"
+    assert updated.created_at == task.created_at
+    assert not app.exception
+
+
+def test_stale_editor_preserves_draft_until_explicit_reload(ui):
+    app, path = ui
+    task = services.create_task(path, "Original")
+    app.run().button(key=f"edit_{task.id}").click().run()
+    services.update_task(path, replace(task, title="Other session"))
+    services.set_task_completed(path, task.id, True)
+    app.text_input(key="edit_title").input("My draft")
+    button(app, "Save changes").click().run()
+    assert not app.exception
+    assert "draft was not saved" in app.warning[0].value
+    assert app.text_input(key="edit_title").value == "My draft"
+    assert services.get_task(path, task.id).title == "Other session"
+    app.button(key="reload_edit").click().run()
+    assert app.text_input(key="edit_title").value == "Other session"
+    app.text_input(key="edit_title").input("Reviewed edit")
+    button(app, "Save changes").click().run()
+    current = services.get_task(path, task.id)
+    assert current.title == "Reviewed edit" and current.completed is True
+    assert app.success[0].value == "Task updated."
+
+
+def test_changed_delete_target_requires_review_and_reconfirmation(ui):
+    app, path = ui
+    task = services.create_task(path, "Original")
+    app.run().button(key=f"delete_{task.id}").click().run()
+    services.update_task(path, replace(task, title="Changed elsewhere"))
+    app.button(key="confirm_delete").click().run()
+    assert services.get_task(path, task.id) is not None
+    assert "Review the latest" in app.warning[0].value
+    assert not any(item.key == "confirm_delete" for item in app.button)
+    app.button(key="review_delete").click().run()
+    assert "Changed elsewhere" in visible_text(app)
+    app.button(key="confirm_delete").click().run()
+    assert services.get_task(path, task.id) is None
+    assert not app.exception
+
+
+def test_delete_conflict_between_display_and_write_is_caught(ui, monkeypatch):
+    app, path = ui
+    task = services.create_task(path, "Keep")
+    app.run().button(key=f"delete_{task.id}").click().run()
+    original_delete = services.delete_task
+
+    def concurrent_delete(db_path, task_id, **kwargs):
+        services.set_task_completed(db_path, task_id, True)
+        return original_delete(db_path, task_id, **kwargs)
+
+    monkeypatch.setattr(services, "delete_task", concurrent_delete)
+    app.button(key="confirm_delete").click().run()
+    assert not app.exception
+    assert any("changed" in item.value for item in app.warning)
+    assert services.get_task(path, task.id).completed is True
+
+
+def test_dashboard_pagination_search_and_filter_reset(ui):
+    app, path = ui
+    tasks = [services.create_task(path, f"Task {i}") for i in range(12)]
+    app.run()
+    assert len([item for item in app.button if str(item.key).startswith("edit_")]) == 10
+    assert app.button(key="previous_page").disabled
+    app.button(key="next_page").click().run()
+    assert tasks[0].title in visible_text(app) and tasks[-1].title not in visible_text(app)
+    assert app.button(key="next_page").disabled
+    app.text_input(key="search").input("Task 11").run()
+    assert tasks[-1].title in visible_text(app)
+    assert tasks[0].title not in visible_text(app)
+    assert any("Page 1 of 1" in item.value for item in app.caption)
+    app.text_input(key="search").input("No match").run()
+    assert "No tasks match" in app.info[0].value
+    assert not app.exception
+
+
+def test_category_filter_and_sorting(ui):
+    app, path = ui
+    low = services.create_task(path, "Low", category="Work", priority=Priority.LOW)
+    high = services.create_task(path, "High", category="Work", priority=Priority.HIGH)
+    personal = services.create_task(path, "Other", category="Personal")
+    app.run().selectbox(key="category_filter").select("Work").run()
+    app.selectbox(key="sort").select("Priority").run()
+    texts = visible_text(app)
+    assert texts.index(high.title) < texts.index(low.title)
+    assert personal.title not in texts
+    services.delete_task(path, low.id)
+    services.delete_task(path, high.id)
+    app.run()
+    assert not app.exception
+    assert personal.title in visible_text(app)
+
+
+def test_previous_page_navigation_and_refresh_preserve_filters(ui):
+    app, path = ui
+    for i in range(11):
+        services.create_task(path, f"Task {i}")
+    app.run().button(key="next_page").click().run()
+    app.button(key="previous_page").click().run()
+    app.button(key="refresh").click().run()
+    assert not app.exception
+    assert any("Page 1 of 2" in item.value for item in app.caption), [item.value for item in app.caption]
