@@ -77,7 +77,7 @@ def test_update_changes_fields_without_mutating_input(db_path):
     original = services.create_task(db_path, "Original", completed=True)
     edited = replace(original, title="  Edited ", description="", priority="Low")
     assert services.update_task(db_path, edited) is True
-    expected = replace(original, title="Edited", description="", priority=Priority.LOW)
+    expected = replace(original, title="Edited", description="", priority=Priority.LOW, version=2)
     assert services.get_task(db_path, original.id) == expected
     assert edited.title == "  Edited "
     assert original.title == "Original"
@@ -86,10 +86,10 @@ def test_update_changes_fields_without_mutating_input(db_path):
 
 def test_complete_reopen_and_repeat_preserve_other_fields(db_path):
     task = services.create_task(db_path, "Keep", "Details", Priority.HIGH)
-    for state in (True, True, False, False):
+    for state, version in ((True, 2), (True, 2), (False, 3), (False, 3)):
         assert services.set_task_completed(db_path, task.id, state) is True
         result = services.get_task(db_path, task.id)
-        assert result == replace(task, completed=state)
+        assert result == replace(task, completed=state, version=version)
         assert result.completed is state
 
 
@@ -144,9 +144,13 @@ def test_filters_preserve_order_and_follow_completion_changes(db_path, status):
     services.set_task_completed(db_path, first.id, True)
     services.set_task_completed(db_path, second.id, False)
     expected = {
-        "All": [replace(first, completed=True), replace(second, completed=False), third],
-        "Pending": [replace(second, completed=False), third],
-        "Completed": [replace(first, completed=True)],
+        "All": [
+            replace(first, completed=True, version=2),
+            replace(second, completed=False, version=2),
+            third,
+        ],
+        "Pending": [replace(second, completed=False, version=2), third],
+        "Completed": [replace(first, completed=True, version=2)],
     }
     assert services.list_tasks(db_path, status) == expected[status]
 

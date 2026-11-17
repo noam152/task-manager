@@ -1,277 +1,162 @@
-# Task Manager
+# Task Manager V2
 
-A beginner-friendly task management web application built with Python,
-Streamlit, SQLite, and pytest.
+A local task dashboard built with Python 3.12, Streamlit, SQLite and pytest.
+Create, edit, complete, reopen and delete tasks. Organize them with priorities,
+categories and optional due dates. Search, filter, sort and browse bounded pages.
 
-## Current status
+## Setup and run
 
-The Task model, SQLite persistence layer, service layer, and Streamlit interface
-are implemented and tested. Starting the app safely initializes its local database.
-GitHub Actions is configured to run the full test suite on pushes to `main` and
-pull requests targeting `main` once the project is published.
-
-Features:
-
-- Create, edit, and delete tasks.
-- Complete and reopen tasks.
-- Assign Low, Medium, or High priority.
-- Filter by All, Pending, or Completed status.
-- Save tasks locally with SQLite.
-
-The initial application will use one shared local task list without user accounts.
-
-## Development setup
-
-Use Python 3.12. Initialization was verified with Python 3.12.10 on Windows.
-Run the following commands from the project root.
-
-### Windows PowerShell
+From the project root in Windows PowerShell:
 
 ```powershell
-python --version
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1
 ```
 
-Using the environment's Python directly avoids needing to activate it or change
-PowerShell execution policies. The `python` command is sufficient; the Windows
-`py` launcher is not required.
-
-### macOS and Linux
+On macOS/Linux with Python 3.12:
 
 ```sh
-python3 --version
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.lock
+.venv/bin/python -m streamlit run app.py --server.address 127.0.0.1
 ```
 
-`requirements.txt` contains Streamlit, the sole direct runtime dependency.
-`requirements-dev.txt` includes it and adds pytest. Direct versions are pinned
-to keep the initial setup consistent; transitive dependencies are resolved by pip.
-SQLite uses Python's built-in `sqlite3` module and needs no pip dependency.
+Open the Local URL printed in the terminal (normally `http://localhost:8501`).
+Stop with Ctrl+C. No account, API key or separate SQLite installation is needed.
+The lock file pins runtime and development dependencies; `requirements.txt` and
+`requirements-dev.txt` declare direct dependencies for deliberate updates.
 
-## Basic checks
+The database defaults to `data/tasks.db` beside `app.py`. An optional override:
 
-On Windows:
+```powershell
+$env:TASK_MANAGER_DB_PATH = "C:\path\to\tasks.db"
+```
+
+Unset with `Remove-Item Env:TASK_MANAGER_DB_PATH`. Relative overrides resolve from
+the working directory. Databases, environments, caches, logs, coverage output and
+common secret files are Git-ignored. Do not put secrets in source files.
+
+## Dashboard
+
+- Create tasks in the sidebar. Medium is the default priority. Successful creation
+  clears the form; validation errors preserve input.
+- Summary metrics are **global**, independent of filters. A pending task is overdue
+  when its due date is before the server's calendar date. Due today is not overdue.
+  Creation times are stored/displayed in UTC.
+- Search title/description, filter by status/category and sort by priority, due date
+  (unscheduled last), newest or oldest. Search treats `%` and `_` literally.
+- Pages show 10, 25 or 50 tasks. Filters reset the page; deletions clamp empty pages.
+- Edit and save, or cancel. A stale draft is retained but not saved. Copy any needed
+  text, choose **Reload latest task**, review the current data, then edit again.
+- Complete/reopen changes only completion. Delete requires confirmation; a changed
+  target must be reviewed again. There is no recycle bin.
+- **Refresh tasks** reloads data. Lock failures show a retry message; detailed
+  database failures go to server logs, not the browser.
+
+## Existing data and migrations
+
+**Before first launching V2**, stop all instances and copy `data/tasks.db` to a
+safe backup location. Initialization creates directories and applies numbered
+migrations transactionally. Original IDs and task content are preserved. Since V1
+did not record creation times, migrated tasks receive the upgrade timestamp.
+Future/unknown schemas are rejected rather than overwritten.
+
+Development/test runs use isolated temporary databases and do not migrate local
+user data. Migration happens when you launch the app. There is no automatic
+downgrade: stop the app and restore the pre-upgrade backup with the old code.
+Do not run V1 against V2 data; it lacks revision checks. For live backups use
+SQLite's backup API instead of copying an active file.
+
+## Architecture and service API
+
+```text
+app.py                         Streamlit dashboard, forms and session drafts
+task_manager/models.py         Task, Priority, TaskPage and TaskSummary
+task_manager/services.py       Validation and business operations
+task_manager/database.py       Parameterized SQL, transactions and pagination
+task_manager/migrations.py     Numbered additive migrations
+task_manager/errors.py         ConflictError and SchemaError
+tests/                         Database, concurrency, service and AppTest tests
+pyproject.toml                 Ruff and branch-coverage configuration
+.github/workflows/tests.yml    Lint, format, tests and coverage gates
+```
+
+All backend operations take an explicit file-backed path. First call
+`database.initialize_database(path)`. Imports have no database side effects.
+
+| Service | Contract |
+| --- | --- |
+| `create_task(path, title, description="", priority=Priority.MEDIUM, completed=False, *, due_date=None, category="")` | Returns a persisted `Task`. |
+| `get_task(path, task_id)` | Returns `Task` or `None` if missing. |
+| `update_task(path, task)` | Replaces editable fields, increments revision; False if missing, `ConflictError` if stale. Input is not mutated. Reload after saving. |
+| `set_task_completed(path, task_id, completed)` | Atomic completion update, False if missing. Repeating a state does not advance revision. |
+| `delete_task(path, task_id, *, expected_version=None)` | False if missing. The UI supplies a revision; omission is for intentional administrative deletion. |
+| `list_tasks(path, status="All", *, search="", category=None, sort="id")` | Unbounded compatibility/export API; use pages for dashboards. |
+| `get_task_page(path, status="All", *, search="", category=None, sort="id", page=1, page_size=10)` | A `TaskPage` with tasks, count, clamped page and page size. |
+| `get_summary(path, *, today=None)` / `list_categories(path)` | Global counts / distinct nonempty category labels. |
+
+Invalid input raises `ValueError` before SQL access, even for missing IDs. SQLite
+errors propagate to the UI boundary. Titles are trimmed, required and limited to
+200 characters. Descriptions preserve whitespace (maximum 10000). Categories are
+trimmed, case-sensitive labels up to 80 characters; empty means uncategorized.
+Priorities accept enum members or exact Low/Medium/High labels. Due dates are
+`datetime.date` or `None`, not strings/timestamps. Completion must be a boolean.
+Duplicate titles and past due dates are allowed. Sort keys are `id`, `priority`,
+`due_date`, `created_desc`, `created_asc`. Valid unchanged edits advance revision.
+
+See [architecture and operations](docs/ARCHITECTURE.md) for transaction details,
+index decisions, backup guidance and deployment alternatives.
+
+## Tests and quality
+
+From the project root in PowerShell:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip check
-.\.venv\Scripts\python.exe -c "import task_manager; import task_manager.models; import task_manager.database; import task_manager.services"
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest --cov --cov-report=term-missing --cov-report=xml
+git diff --check
 ```
 
-On macOS/Linux, replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
+On macOS/Linux replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
+Target a file by appending e.g. `tests/test_integrity.py` to the pytest command.
+For HTML coverage use `python -m pytest --cov --cov-report=html` in the virtual
+environment; reports go to ignored `htmlcov/`. All integration tests/AppTest use
+temporary paths, never the default user database.
 
-`pip check` checks installed dependency compatibility. The import command checks
-that the package is available from the project root. `pytest.ini` sets the test
-directory and adds the project root to pytest's import path.
+CI runs on main pushes and pull requests targeting main, with Ubuntu/Python 3.12.
+It installs `requirements-dev.lock`, runs Ruff lint/format, and tests with branch
+measurement and a **90% combined coverage floor**. Permissions are read-only,
+actions use immutable SHAs, and no deployment or repository write is performed.
 
-Run only the persistence tests with:
+For dependency updates, use a **clean Python 3.12 environment**, install
+`requirements-dev.txt`, run all checks, then regenerate the lock with
+`python -m pip freeze`. Review every changed pin, including transitive packages,
+and verify Ubuntu CI before adoption. The lock is version-pinned, not a hash lock
+or vulnerability-audit guarantee.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_database.py
-```
+## Limitations
 
-Run only the service tests with:
+This is a local/small trusted-team app, not a public multi-tenant service. There
+is no authentication, ownership, encryption at rest, reminder delivery or audit
+history. Everyone who can reach the server shares the same task list. Bind to
+loopback and protect OS/database access; do not expose it publicly as-is.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_services.py
-```
+SQLite supports one host and modest writes; writers serialize and locks may time
+out after five seconds. Substring search scans candidates and deep OFFSET pages
+cost more. SQLite LIKE is ASCII case-insensitive, not full Unicode case folding.
+Categories are single labels, not many-to-many tags. Refresh is manual and due
+dates use the server's date, not each browser's timezone.
 
-Database and service integration tests use pytest's temporary directories, never
-an application database. Service unit tests use mocks to verify validation before
-database access. Run the Streamlit AppTest flows with:
+FastAPI/REST needs independent clients; authentication/ownership is needed before
+untrusted users; PostgreSQL needs multi-host or sustained concurrent writes.
+Docker is optional packaging. Costs and deployment requirements are evaluated in
+[architecture notes](docs/ARCHITECTURE.md#deployment-and-possible-expansion);
+none is introduced automatically.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_app.py
-```
+## License
 
-UI tests set `TASK_MANAGER_DB_PATH` to a temporary path before starting the app,
-so they never access the normal application database. AppTest is included in
-Streamlit; no extra testing dependency is required.
-
-### Automated tests (GitHub Actions)
-
-`.github/workflows/tests.yml` installs `requirements-dev.txt` on `ubuntu-latest`
-with Python 3.12 and runs `python -m pytest`. It includes the database, service,
-and Streamlit AppTest suites. The workflow needs no secrets and has read-only
-repository permissions. GitHub actions are pinned to commit SHAs with release
-comments; update the SHA and comment together when upgrading an action.
-
-Run the equivalent complete suite locally from the project root:
-
-```powershell
-# Windows PowerShell
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest
-```
-
-```sh
-# macOS/Linux
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest
-```
-
-## Running the application
-
-After completing development setup, run this exact command from the project root
-in PowerShell:
-
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run app.py
-```
-
-On macOS/Linux:
-
-```sh
-.venv/bin/python -m streamlit run app.py
-```
-
-Streamlit normally opens the app in a browser at `http://localhost:8501`. If it
-does not open automatically, use the Local URL printed in the terminal. Stop the
-server with Ctrl+C.
-
-The app creates `data/` and initializes `data/tasks.db` beside `app.py` on startup.
-Repeated initialization preserves existing tasks. Tasks persist across browser
-refreshes and server restarts. Database files and SQLite sidecars are Git-ignored.
-No sample tasks are inserted.
-
-For an alternate local database, optionally set the path before starting:
-
-```powershell
-$env:TASK_MANAGER_DB_PATH = "C:\path\to\alternate\tasks.db"
-.\.venv\Scripts\python.exe -m streamlit run app.py
-```
-
-Unset it with `Remove-Item Env:TASK_MANAGER_DB_PATH` to return to the default on
-the next server start. Relative override paths resolve from the working directory;
-the default path resolves relative to `app.py`.
-
-### Using the interface
-
-- Enter a title, optional description, and priority, then choose **Create task**.
-  Blank titles show a validation message and preserve your input for correction.
-- Use **Filter by status** to show All, Pending, or Completed tasks. Empty views
-  show a helpful message.
-- Choose **Edit**, update the fields, then **Save changes** or **Cancel editing**.
-  Editing details preserves the current completion state.
-- Choose **Complete** or **Reopen** to change completion status.
-- Choose **Delete**, then explicitly **Confirm deletion**. **Keep task** cancels
-  without changing the database. Deleted tasks cannot be restored through the UI.
-
-Successful operations show confirmation messages. If a selected task has been
-removed, the app shows a warning instead of failing. Database access failures
-show a friendly error; check directory permissions or retry when a lock clears.
-
-## Project layout
-
-```text
-task-manager/
-|-- app.py                    # Streamlit forms, task cards, and actions
-|-- task_manager/
-|   |-- __init__.py           # Importable application package
-|   |-- models.py             # Task dataclass and Priority enum
-|   |-- database.py           # SQLite connections, schema, and CRUD
-|   `-- services.py           # Validation, task operations, and status filtering
-|-- tests/
-|   |-- conftest.py           # Future shared fixtures
-|   |-- test_database.py      # Persistence and connection-management tests
-|   |-- test_services.py      # Service unit and integration tests
-|   `-- test_app.py           # Streamlit AppTest user flows and validation
-|-- .github/workflows/
-|   `-- tests.yml             # GitHub Actions: Python 3.12 and full pytest suite
-|-- .gitignore               # Excludes local/generated files and secrets
-|-- pytest.ini               # Test discovery and package import settings
-|-- requirements.txt         # Direct runtime dependencies
-|-- requirements-dev.txt     # Runtime and testing dependencies
-`-- README.md                # Setup, scope, and project guide
-```
-
-## Persistence API
-
-`Task` is a dataclass with `id`, `title`, `description`, `priority`, and
-`completed` fields. SQLite assigns IDs when creating tasks. Description defaults
-to an empty string, priority to `Priority.MEDIUM`, and completion to `False`.
-`Priority` is a string enum defining `Low`, `Medium`, and `High` in display order.
-
-All persistence functions require an explicit file-backed path (`str` or `Path`).
-The UI uses `data/tasks.db` by default; tests always choose temporary paths.
-Importing the package does not create directories or open a database.
-
-| Function | Behavior |
-| --- | --- |
-| `initialize_database(db_path)` | Creates parent directories and the table; safe to repeat without losing tasks. |
-| `create_task(db_path, title, description="", priority=Priority.MEDIUM, completed=False)` | Inserts and returns a `Task` with its generated ID. |
-| `get_task(db_path, task_id)` | Returns a `Task`, or `None` for a missing ID. |
-| `list_tasks(db_path)` | Returns tasks in ascending ID order, or an empty list. |
-| `update_task(db_path, task)` | Replaces editable fields by ID; returns `True` if found, including unchanged values, or `False` if missing. |
-| `delete_task(db_path, task_id)` | Returns `True` if deleted, or `False` if missing or already deleted. |
-| `get_connection(db_path)` | Context manager that commits on success, rolls back on error, and always closes the connection. |
-
-Call initialization before CRUD operations. Each call uses a new connection,
-so per-connection `:memory:` databases are unsuitable for this API. SQLite errors
-propagate to the caller, including `sqlite3.IntegrityError` for constraint
-violations. The schema enforces non-null fields, supported priorities, and
-completion values of 0 or 1. User-supplied query values are parameterized.
-Blank-title checks and other business validation belong to the services
-layer; the database does not trim or reject blank text. Initialization creates
-the initial schema; it does not migrate an incompatible existing schema.
-
-## Service API
-
-Use `task_manager.services` for validated application operations. Its functions
-require the same explicit file-backed database path as persistence. Initialize
-the database through `database.initialize_database(db_path)` before using it;
-services do not initialize databases implicitly or contain SQL.
-
-| Function | Behavior |
-| --- | --- |
-| `create_task(db_path, title, description="", priority=Priority.MEDIUM, completed=False)` | Validates and returns a new persisted `Task`. |
-| `get_task(db_path, task_id)` | Returns a task or `None` for a missing ID. |
-| `update_task(db_path, task)` | Validates and replaces all editable fields; returns `False` if missing, otherwise `True`, even when unchanged. Does not mutate the supplied task. |
-| `set_task_completed(db_path, task_id, completed)` | Pass `True` to complete or `False` to reopen. Preserves the other fields. Returns `False` if missing; repeating the current state returns `True`. |
-| `delete_task(db_path, task_id)` | Returns `True` if deleted, or `False` if missing/already deleted. |
-| `list_tasks(db_path, status="All")` | Accepts exactly `All`, `Pending`, or `Completed`, preserves ascending ID order, and returns an empty list when nothing matches. |
-
-Creation and updates require a string title containing non-whitespace characters.
-Leading/trailing title whitespace is stripped; internal whitespace and Unicode
-are preserved. Duplicate titles are allowed. Descriptions must be strings;
-empty descriptions are allowed and their whitespace is preserved. Priorities
-accept a `Priority` member or its exact label (`Low`, `Medium`, or `High`), without
-case conversion or whitespace trimming. Completion values must be actual booleans,
-not integers or strings.
-
-Invalid fields or status filters raise `ValueError` before database access.
-Updates validate input even when the supplied ID does not exist. For valid input,
-missing IDs follow the database API's `None`/`False` behavior. Database exceptions
-propagate unchanged; they are not converted into validation errors.
-
-Updates accept the full `Task`, matching the existing database API. Use
-`dataclasses.replace` to preserve fields that are not being edited:
-
-```python
-from dataclasses import replace
-from task_manager import services
-from task_manager.models import Priority
-
-# db_path must refer to an explicitly initialized database.
-task = services.create_task(db_path, "  Write tests  ", priority=Priority.HIGH)
-services.update_task(db_path, replace(task, description="Cover edge cases"))
-services.set_task_completed(db_path, task.id, True)
-completed_tasks = services.list_tasks(db_path, "Completed")
-services.set_task_completed(db_path, task.id, False)  # Reopen the task.
-```
-
-## Git and GitHub
-
-The primary branch is `main`. Project initialization does not create a commit,
-configure a remote, or publish anything.
-
-Keep commits small and include relevant tests with each feature. Before committing,
-review `git status` and the staged diff. Virtual environments, database files,
-caches, and common secret files are ignored. Git ignore patterns cannot detect
-secrets embedded in source files, so review those files too.
-
-Before GitHub publication, choose a license, review the setup documentation,
-and verify the full test suite. Add a remote and
-push only when publication is authorized.
+[MIT](LICENSE), selected by the project owner.

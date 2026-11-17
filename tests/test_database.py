@@ -32,7 +32,15 @@ def test_initialization_creates_parent_directories_and_schema(tmp_path):
     with get_connection(path) as connection:
         columns = connection.execute("PRAGMA table_info(tasks)").fetchall()
     assert [column["name"] for column in columns] == [
-        "id", "title", "description", "priority", "completed"
+        "id",
+        "title",
+        "description",
+        "priority",
+        "completed",
+        "version",
+        "due_date",
+        "category",
+        "created_at",
     ]
     assert columns[0]["pk"] == 1
     assert list_tasks(path) == []
@@ -79,13 +87,15 @@ def test_list_is_ordered_and_ids_are_not_reused_after_deletion(db_path):
 def test_update_replaces_all_fields_and_can_reopen_task(db_path):
     task = create_task(db_path, "Original")
     other = create_task(db_path, "Unchanged")
-    edited = replace(task, title="Edited", description="Details",
-                     priority=Priority.HIGH, completed=True)
+    edited = replace(
+        task, title="Edited", description="Details", priority=Priority.HIGH, completed=True
+    )
     assert update_task(db_path, edited) is True
-    assert get_task(db_path, task.id) == edited
+    assert get_task(db_path, task.id) == replace(edited, version=task.version + 1)
     assert get_task(db_path, other.id) == other
-    assert update_task(db_path, edited) is True
-    reopened = replace(edited, completed=False)
+    current = get_task(db_path, task.id)
+    assert update_task(db_path, current) is True
+    reopened = replace(get_task(db_path, task.id), completed=False)
     assert update_task(db_path, reopened) is True
     assert get_task(db_path, task.id).completed is False
 
@@ -120,16 +130,14 @@ def test_changes_persist_across_independent_connections(db_path):
         ).fetchone() == ("Persisted", 1)
     finally:
         connection.close()
-    assert get_task(db_path, task.id) == edited
+    assert get_task(db_path, task.id) == replace(edited, version=task.version + 1)
     delete_task(db_path, task.id)
     assert list_tasks(db_path) == []
 
 
 def test_connection_commits_and_closes_on_success(db_path):
     with get_connection(db_path) as connection:
-        cursor = connection.execute(
-            "INSERT INTO tasks (title) VALUES (?)", ("Saved",)
-        )
+        cursor = connection.execute("INSERT INTO tasks (title) VALUES (?)", ("Saved",))
         task_id = cursor.lastrowid
     with pytest.raises(sqlite3.ProgrammingError):
         connection.execute("SELECT 1")
@@ -170,12 +178,8 @@ def test_connection_rolls_back_and_closes_on_commit_failure(db_path):
             connection.autocommit = False
             assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
-            connection.execute(
-                "INSERT INTO tasks (title) VALUES (?)", ("Must roll back",)
-            )
-            connection.execute(
-                "INSERT INTO children (parent_id) VALUES (?)", (999,)
-            )
+            connection.execute("INSERT INTO tasks (title) VALUES (?)", ("Must roll back",))
+            connection.execute("INSERT INTO children (parent_id) VALUES (?)", (999,))
             # Both writes succeed: the violation must surface at context exit.
             assert connection.execute("SELECT COUNT(*) FROM children").fetchone()[0] == 1
             body_completed = True
@@ -189,15 +193,18 @@ def test_connection_rolls_back_and_closes_on_commit_failure(db_path):
         assert reopened.execute("SELECT COUNT(*) FROM children").fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("field,value", [
-    ("title", None),
-    ("description", None),
-    ("priority", "Urgent"),
-    ("priority", "high"),
-    ("priority", None),
-    ("completed", 2),
-    ("completed", None),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("title", None),
+        ("description", None),
+        ("priority", "Urgent"),
+        ("priority", "high"),
+        ("priority", None),
+        ("completed", 2),
+        ("completed", None),
+    ],
+)
 def test_invalid_insert_is_rejected_without_losing_existing_data(db_path, field, value):
     existing = create_task(db_path, "Keep")
     fields = {"title": "Invalid", field: value}
@@ -206,15 +213,18 @@ def test_invalid_insert_is_rejected_without_losing_existing_data(db_path, field,
     assert list_tasks(db_path) == [existing]
 
 
-@pytest.mark.parametrize("field,value", [
-    ("title", None),
-    ("description", None),
-    ("priority", "Urgent"),
-    ("priority", "high"),
-    ("priority", None),
-    ("completed", 2),
-    ("completed", None),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("title", None),
+        ("description", None),
+        ("priority", "Urgent"),
+        ("priority", "high"),
+        ("priority", None),
+        ("completed", 2),
+        ("completed", None),
+    ],
+)
 def test_invalid_update_preserves_original_task(db_path, field, value):
     task = create_task(db_path, "Keep", "Original details", Priority.HIGH, True)
     changes = {
@@ -238,7 +248,7 @@ def test_sql_like_text_quotes_and_unicode_round_trip(db_path):
     assert get_task(db_path, task.id).description == description
     edited = replace(task, title=description, description=title)
     assert update_task(db_path, edited) is True
-    assert list_tasks(db_path) == [edited]
+    assert list_tasks(db_path) == [replace(edited, version=task.version + 1)]
     assert create_task(db_path, "Table still exists").id > task.id
 
 
