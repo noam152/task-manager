@@ -1,5 +1,8 @@
 # Task Manager V2 architecture
 
+[Project overview](../README.md) · [Usage and operations](USAGE.md) ·
+[Development](DEVELOPMENT.md)
+
 ## Boundaries
 
 Streamlit owns widgets, forms, session drafts and feedback. Services own runtime
@@ -7,6 +10,70 @@ validation and normalization. Persistence owns SQL and transactions. Shared mode
 contain data and the pure overdue predicate. Domain errors do not depend on the UI.
 There is no ORM, SQL in the UI or task cache. A generic repository abstraction is
 unnecessary for a single SQLite implementation.
+
+| File | Responsibility |
+| --- | --- |
+| [`app.py`](../app.py) | Dashboard, forms, session drafts, and user feedback. |
+| [`models.py`](../task_manager/models.py) | `Task`, `Priority`, `TaskPage`, `TaskSummary`, and the overdue predicate. |
+| [`services.py`](../task_manager/services.py) | Input validation, normalization, and business operations. |
+| [`database.py`](../task_manager/database.py) | Parameterized queries, connection lifetime, transactions, and pagination. |
+| [`migrations.py`](../task_manager/migrations.py) | Numbered, additive schema changes. |
+| [`errors.py`](../task_manager/errors.py) | `ConflictError` and `SchemaError`. |
+
+## Service contracts
+
+The functions below belong to `task_manager.services`. Every operation takes an
+explicit file-backed `db_path` (`str` or `Path`). Call
+`database.initialize_database(db_path)` before use. Imports do not create files or
+connections. Each persistence operation opens a new connection, so separate
+`:memory:` databases are unsuitable for this API.
+
+### Task operations
+
+| Function | Contract |
+| --- | --- |
+| `create_task(db_path, title, description="", priority=Priority.MEDIUM, completed=False, *, due_date=None, category="")` | Returns the persisted `Task`, including its assigned ID, revision, and UTC creation timestamp. |
+| `get_task(db_path, task_id)` | Returns `Task` or `None` if missing. |
+| `update_task(db_path, task)` | Replaces all editable fields using the supplied revision. Returns `True` if saved, `False` if missing; raises `ConflictError` if stale. Successful writes, including unchanged edits, increment the revision. Input is not mutated; reload before the next edit. |
+| `set_task_completed(db_path, task_id, completed)` | Updates completion only. Returns `True` if found, `False` if missing. Repeating the current state succeeds without incrementing the revision. |
+| `delete_task(db_path, task_id, *, expected_version=None)` | Returns `True` if deleted, `False` if missing or already deleted. A mismatched supplied revision raises `ConflictError`. The UI always supplies a revision; omission permits intentional administrative deletion by ID. |
+
+Use `dataclasses.replace` to edit a retrieved `Task` while preserving fields you
+are not changing. `created_at` is metadata, not an editable field. Revision checks
+and the original UI snapshot are explained under [concurrency](#integrity-and-concurrency).
+
+### Queries
+
+| Function | Contract |
+| --- | --- |
+| `list_tasks(db_path, status="All", *, search="", category=None, sort="id")` | Returns an unbounded list for compatibility, export, or tests. The dashboard uses pages instead. |
+| `get_task_page(db_path, status="All", *, search="", category=None, sort="id", page=1, page_size=10)` | Returns `TaskPage(tasks, total, page, page_size)`. Count and rows share one read snapshot; out-of-range pages clamp to the last available page. Empty results have page/pages equal to 1. |
+| `get_summary(db_path, *, today=None)` | Returns global `TaskSummary(total, pending, completed, overdue)`. `today` defaults to the server's calendar date. |
+| `list_categories(db_path)` | Returns distinct nonempty category labels. |
+
+Status labels are exactly `All`, `Pending`, and `Completed`. A category of `None`
+means all categories; `""` selects uncategorized tasks. Search is trimmed and
+limited to 200 characters. Sort keys are `id`, `priority`, `due_date`,
+`created_desc`, and `created_asc`; the API defaults to ascending ID order, while
+the dashboard defaults to newest first. Pages must be positive integers, with
+page sizes from 1 to 100. See [query behavior](#queries-and-performance).
+
+### Validation and errors
+
+| Input | Rule |
+| --- | --- |
+| Title | String, trimmed, nonempty, maximum 200 characters. |
+| Description | String, whitespace preserved, maximum 10000 characters; empty allowed. |
+| Priority | `Priority` member or exact `Low`, `Medium`, or `High` label; no case conversion or trimming. Defaults to Medium. |
+| Completion | Actual boolean; integers and strings are rejected. Defaults to `False`. |
+| Due date | `datetime.date` or `None`; strings and `datetime.datetime` are rejected. Past dates are allowed. |
+| Category | String, trimmed, maximum 80 characters; case-sensitive, empty means uncategorized. |
+| ID / revision | IDs must be integers, excluding booleans. Revisions must be positive integers, excluding booleans. Missing integer IDs follow the return contracts above. |
+
+Duplicate titles are allowed. Invalid input raises `ValueError` before database
+access, even for missing IDs. SQLite exceptions propagate to the UI boundary.
+`SchemaError` reports incompatible schema versions/layouts. The persistence layer
+enforces storage constraints; it does not trim titles or perform service validation.
 
 ## Integrity and concurrency
 
@@ -36,7 +103,7 @@ Concurrency tests use independent connections, barriers and explicit locks, not
 sleeps. They verify stale-write rejection, simultaneous writers, preserved details
 during completion, lock recovery, transaction rollback and connection closure.
 
-## Migrations and backups
+## Migrations
 
 `PRAGMA user_version` identifies numbered additive migrations. An immediate write
 transaction serializes initialization and rechecks the version under the lock.
@@ -51,10 +118,9 @@ Original IDs and contents are preserved. Legacy creation timestamps were never
 recorded, so migrated rows receive upgrade time. Only supported service/database
 APIs are application write paths; manual raw SQL may bypass validation/metadata.
 
-Stop all instances and back up before upgrading. There is no automatic downgrade:
-restore the prior backup with the prior code. A live backup must use SQLite's
-backup API, not a file copy while writes are active. Protect backups as sensitive
-task data. Tests never open the application database.
+For upgrade, backup, and rollback procedures, see
+[usage and operations](USAGE.md#upgrades-and-backups). Schema changes must preserve
+existing data and advance the version only after the migration succeeds.
 
 ## Queries and performance
 
@@ -72,11 +138,9 @@ requirements before adding complexity.
 
 ## Quality and security
 
-Ruff checks lint/import ordering and formatting. pytest-cov measures statements
-and branches, including UI code, with a 90% combined gate. Uncovered paths are
-reported rather than hidden with blanket exclusions. Versions/action SHAs are
-pinned; hash verification and recurring dependency-advisory audits remain future
-hardening, not claimed guarantees. Review dependency changes through CI.
+The [development guide](DEVELOPMENT.md) documents test isolation, coverage, Ruff,
+CI permissions, and dependency updates. Annotations do not perform runtime
+validation; service validation and storage constraints serve different purposes.
 
 No secrets are required. Database exceptions are logged server-side and shown
 generically to users. Titles/descriptions use text rendering, not unsafe HTML.
@@ -97,5 +161,5 @@ an explicit security and operational design.
 | Docker | A target requiring consistent packaging | Image updates, non-root runtime, durable volume, health checks and scanning |
 | Hosted Streamlit | A chosen host with durable writable storage | Verify restart persistence, access control, monitoring and backups; ephemeral local SQLite is insufficient |
 
-None of these is added without those requirements. No infrastructure, deployment,
-GitHub settings or remote history is changed by this upgrade.
+These are possible extensions, not implemented features. The current application
+uses Streamlit and local SQLite without extra infrastructure.
