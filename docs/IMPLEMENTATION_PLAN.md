@@ -1,15 +1,20 @@
-# Task Manager V2 implementation plan
+# Task Manager V2 implementation record
 
-Baseline: clean `main` at `4426ced`; 103 tests pass on Python 3.12.10.
+This is the completed V2 plan and delivery record, retained for historical context.
+For current behavior, see [architecture](ARCHITECTURE.md); for checks to run on
+your checkout, see [development](DEVELOPMENT.md). Findings and results below
+describe the V2 upgrade, not outstanding defects or live CI status.
 
-## Review findings
+The baseline was clean `main` at `4426ced`, with 103 passing tests on Python 3.12.10.
 
-- Completion performs a read followed by a full-row update, risking lost edits.
-- Full edits have no revision check; a stale form can overwrite another session.
-- The editor reloads the latest row during submit, hiding the age of its draft.
-- Initialization cannot evolve existing data; filtering loads all records.
-- Missing due dates, search, categories, pagination, summaries and quality gates.
-- SQLite parameters and connection cleanup are already sound; retain these layers.
+## Findings at the start of V2
+
+- Completion read and then replaced a full row, risking lost edits.
+- Full edits had no revision check; stale forms could overwrite newer changes.
+- The editor reloaded the latest row during submission, hiding the age of its draft.
+- Initialization could not evolve existing data; filtering loaded all records.
+- Due dates, search, categories, pagination, summaries, and quality gates were missing.
+- SQL parameters and connection cleanup were sound and were retained.
 
 ## Phases and acceptance criteria
 
@@ -24,10 +29,11 @@ Baseline: clean `main` at `4426ced`; 103 tests pass on Python 3.12.10.
    actions explain conflicts and require reload/reconfirmation; AppTest covers them.
 4. **Delivery:** lint, format, branch coverage and the full suite pass; CI enforces
    them; README and architecture notes explain migrations, backups, limitations
-   and optional future technologies. Add MIT only after the user's selection.
+   and optional future technologies. License selection preceded adding MIT.
 
-Use a dedicated local branch and commits containing tests alongside each phase.
-Never test against application data, push, merge, deploy or change GitHub settings.
+The upgrade used a dedicated branch with tests committed alongside each phase.
+Its scope excluded testing against user data, pushing, merging, deploying, or
+changing repository settings.
 
 ## Completion record
 
@@ -39,12 +45,14 @@ Never test against application data, push, merge, deploy or change GitHub settin
 | Dashboard | 169 total tests passed; fixed a pagination trigger regression found by AppTest. |
 | Delivery | 172 tests passed; 98.19% combined statement/branch coverage; Ruff lint/format and diff checks passed. |
 
-Workflow YAML/TOML and all required CI gates were checked locally. A pip dry run
-resolved the pinned dependencies for Python 3.12 Linux wheels. Actual Ubuntu CI
-execution awaits a separately authorized push/PR. The remaining uncovered paths
-are defensive direct-database argument checks, a schema version race guard and
-minor UI presentation/import branches. No critical write path is excluded.
+At delivery, workflow YAML/TOML and CI gates were checked locally. A pip dry run
+resolved pinned dependencies for Python 3.12 Linux wheels; it did not execute the
+hosted Ubuntu workflow. These are historical results, not a current CI report.
+Uncovered paths at delivery were defensive direct-database argument checks, a
+schema version race guard, and minor UI presentation/import branches. No critical
+write path was excluded from coverage measurement.
 
-The user selected MIT after being presented license choices. No real user database
-was migrated during implementation. Back up before launching V2. No remote push,
-merge, deployment, history rewrite or repository-settings change was performed.
+The delivery included an MIT license. No real user database was migrated during
+implementation, and no remote push, merge, deployment, history rewrite, or
+repository-settings change was performed as part of that work. Follow the current
+[backup instructions](USAGE.md#upgrades-and-backups) before upgrading existing data.
